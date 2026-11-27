@@ -8,6 +8,7 @@ import os
 import random
 import sys
 from collections import deque
+from dataclasses import dataclass, field
 from typing import Any
 
 from jsonl_kit import __version__
@@ -72,6 +73,10 @@ def _parser() -> argparse.ArgumentParser:
     sample.add_argument("--seed", type=int, default=None, help="RNG seed")
     _add_file(sample)
     sample.set_defaults(func=cmd_sample)
+
+    stats = sub.add_parser("stats", help="per-key presence, types, and numeric range")
+    _add_file(stats)
+    stats.set_defaults(func=cmd_stats)
     return parser
 
 
@@ -179,6 +184,103 @@ def cmd_sample(args: argparse.Namespace) -> int:
     chosen.sort()
     for _, value in chosen:
         _emit(value)
+    return _status(reader)
+
+
+_TYPE_ORDER = ("null", "bool", "int", "float", "str", "array", "object")
+
+
+@dataclass
+class _Col:
+    count: int = 0
+    types: set[str] = field(default_factory=set)
+    low: int | float | None = None
+    high: int | float | None = None
+
+    def add_number(self, number: int | float) -> None:
+        if self.low is None or number < self.low:
+            self.low = number
+        if self.high is None or number > self.high:
+            self.high = number
+
+
+def _typename(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "other"
+
+
+def _walk(cols: dict[str, _Col], obj: dict[str, Any], prefix: str) -> None:
+    for key, value in obj.items():
+        path = f"{prefix}.{key}" if prefix else key
+        col = cols.get(path)
+        if col is None:
+            col = cols[path] = _Col()
+        col.count += 1
+        col.types.add(_typename(value))
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            col.add_number(value)
+        if isinstance(value, dict):
+            _walk(cols, value, path)
+
+
+def _render_stats(records: int, skipped: int, cols: dict[str, _Col]) -> str:
+    lines = [f"records: {records}", f"skipped: {skipped}"]
+    if records == 0 or not cols:
+        return "\n".join(lines) + "\n"
+    ranked = sorted(cols.items(), key=lambda item: (-item[1].count, item[0]))
+    rows: list[tuple[str, str, str, str, str]] = []
+    for name, col in ranked:
+        pct = 100.0 * col.count / records
+        types = ", ".join(kind for kind in _TYPE_ORDER if kind in col.types)
+        rows.append((name, f"{pct:.1f}%", types, _num(col.low), _num(col.high)))
+    header = ("field", "present", "types", "min", "max")
+    widths = [len(cell) for cell in header]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+
+    def fmt(row: tuple[str, str, str, str, str]) -> str:
+        field_name, present, types, low, high = row
+        text = (
+            f"{field_name:<{widths[0]}}  {present:>{widths[1]}}  "
+            f"{types:<{widths[2]}}  {low:>{widths[3]}}  {high:>{widths[4]}}"
+        )
+        return text.rstrip()
+
+    lines.append("")
+    lines.append(fmt(header))
+    lines.extend(fmt(row) for row in rows)
+    return "\n".join(lines) + "\n"
+
+
+def _num(value: int | float | None) -> str:
+    if value is None:
+        return ""
+    return json.dumps(value)
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    reader = JsonlReader(args.file)
+    cols: dict[str, _Col] = {}
+    records = 0
+    for _, value in reader:
+        records += 1
+        if isinstance(value, dict):
+            _walk(cols, value, "")
+    sys.stdout.write(_render_stats(records, reader.skipped, cols))
     return _status(reader)
 
 
