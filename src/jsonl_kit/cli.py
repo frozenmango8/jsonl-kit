@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import random
 import sys
 from collections import deque
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,6 +79,15 @@ def _parser() -> argparse.ArgumentParser:
     stats = sub.add_parser("stats", help="per-key presence, types, and numeric range")
     _add_file(stats)
     stats.set_defaults(func=cmd_stats)
+
+    to_csv = sub.add_parser("to-csv", help="write top-level keys as CSV")
+    to_csv.add_argument(
+        "-f",
+        "--fields",
+        help="column names; default is every key seen",
+    )
+    _add_file(to_csv)
+    to_csv.set_defaults(func=cmd_to_csv)
     return parser
 
 
@@ -281,6 +292,57 @@ def cmd_stats(args: argparse.Namespace) -> int:
         if isinstance(value, dict):
             _walk(cols, value, "")
     sys.stdout.write(_render_stats(records, reader.skipped, cols))
+    return _status(reader)
+
+
+def _csv_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return json.dumps(value)
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _write_csv(columns: list[str], rows: Iterable[Mapping[str, Any]]) -> None:
+    # Pin the line ending so Windows doesn't rewrite the stream as CRLF.
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    if not columns:
+        return
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([_csv_cell(row.get(key)) for key in columns])
+
+
+def _objects(reader: JsonlReader) -> Iterator[dict[str, Any]]:
+    for lineno, value in reader:
+        if isinstance(value, dict):
+            yield value
+            continue
+        reader.warn(lineno, "expected an object")
+
+
+def cmd_to_csv(args: argparse.Namespace) -> int:
+    try:
+        columns = _split_fields(args.fields) if args.fields else None
+    except ExprError as exc:
+        print(f"jsonl: {exc}", file=sys.stderr)
+        return 2
+    reader = JsonlReader(args.file)
+    if columns is not None:
+        _write_csv(columns, _objects(reader))
+        return _status(reader)
+    seen: dict[str, None] = {}
+    rows: list[dict[str, Any]] = []
+    for row in _objects(reader):
+        rows.append(row)
+        for key in row:
+            if key not in seen:
+                seen[key] = None
+    _write_csv(list(seen), rows)
     return _status(reader)
 
 
