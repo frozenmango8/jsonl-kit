@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
 from collections import deque
 from typing import Any
@@ -65,6 +66,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_file(pick)
     pick.set_defaults(func=cmd_pick)
+
+    sample = sub.add_parser("sample", help="reservoir-sample records")
+    sample.add_argument("-n", type=int, required=True, metavar="N", help="sample size")
+    sample.add_argument("--seed", type=int, default=None, help="RNG seed")
+    _add_file(sample)
+    sample.set_defaults(func=cmd_sample)
     return parser
 
 
@@ -150,6 +157,28 @@ def cmd_pick(args: argparse.Namespace) -> int:
     reader = JsonlReader(args.file)
     for _, value in reader:
         _emit({name: lookup(value, parts) for name, parts in fields})
+    return _status(reader)
+
+
+def cmd_sample(args: argparse.Namespace) -> int:
+    message = _check_n(args.n)
+    if message:
+        print(f"jsonl: {message}", file=sys.stderr)
+        return 2
+    rng = random.Random(args.seed)
+    reader = JsonlReader(args.file)
+    # Algorithm R. Keep the original index so the sample stays in input order.
+    chosen: list[tuple[int, Any]] = []
+    for index, (_, value) in enumerate(reader):
+        if index < args.n:
+            chosen.append((index, value))
+            continue
+        slot = rng.randrange(index + 1)
+        if slot < args.n:
+            chosen[slot] = (index, value)
+    chosen.sort()
+    for _, value in chosen:
+        _emit(value)
     return _status(reader)
 
 
