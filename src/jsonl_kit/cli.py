@@ -10,7 +10,7 @@ from collections import deque
 from typing import Any
 
 from jsonl_kit import __version__
-from jsonl_kit.expr import ExprError, compile_expr
+from jsonl_kit.expr import ExprError, compile_expr, lookup, parse_path
 from jsonl_kit.reader import JsonlReader
 
 
@@ -56,6 +56,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_file(filt)
     filt.set_defaults(func=cmd_filter)
+
+    pick = sub.add_parser("pick", help="keep selected fields")
+    pick.add_argument(
+        "fields",
+        metavar="FIELDS",
+        help="comma-separated paths, e.g. status,user.id",
+    )
+    _add_file(pick)
+    pick.set_defaults(func=cmd_pick)
     return parser
 
 
@@ -109,6 +118,38 @@ def cmd_tail(args: argparse.Namespace) -> int:
         last.append(value)
     for value in last:
         _emit(value)
+    return _status(reader)
+
+
+def _split_fields(spec: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in spec:
+        if ch == "[":
+            depth += 1
+        elif ch == "]" and depth:
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    parts.append("".join(buf).strip())
+    if any(part == "" for part in parts):
+        raise ExprError("empty field in list")
+    return parts
+
+
+def cmd_pick(args: argparse.Namespace) -> int:
+    try:
+        fields = [(name, parse_path(name)) for name in _split_fields(args.fields)]
+    except ExprError as exc:
+        print(f"jsonl: {exc}", file=sys.stderr)
+        return 2
+    reader = JsonlReader(args.file)
+    for _, value in reader:
+        _emit({name: lookup(value, parts) for name, parts in fields})
     return _status(reader)
 
 
