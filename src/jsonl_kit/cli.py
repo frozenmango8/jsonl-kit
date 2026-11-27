@@ -10,6 +10,7 @@ from collections import deque
 from typing import Any
 
 from jsonl_kit import __version__
+from jsonl_kit.expr import ExprError, compile_expr
 from jsonl_kit.reader import JsonlReader
 
 
@@ -46,6 +47,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_file(tail)
     tail.set_defaults(func=cmd_tail)
+
+    filt = sub.add_parser("filter", help="keep records matching an expression")
+    filt.add_argument(
+        "expr",
+        metavar="EXPR",
+        help='e.g. status == 200 and user.country == "US"',
+    )
+    _add_file(filt)
+    filt.set_defaults(func=cmd_filter)
     return parser
 
 
@@ -99,6 +109,19 @@ def cmd_tail(args: argparse.Namespace) -> int:
         last.append(value)
     for value in last:
         _emit(value)
+    return _status(reader)
+
+
+def cmd_filter(args: argparse.Namespace) -> int:
+    try:
+        predicate = compile_expr(args.expr)
+    except ExprError as exc:
+        print(f"jsonl: {exc}", file=sys.stderr)
+        return 2
+    reader = JsonlReader(args.file)
+    for _, value in reader:
+        if predicate(value):
+            _emit(value)
     return _status(reader)
 
 
