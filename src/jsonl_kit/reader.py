@@ -38,7 +38,7 @@ class JsonlReader:
 
     def warn(self, lineno: int, message: str) -> None:
         self.skipped += 1
-        print(f"{self.name}:{lineno}: {message}", file=sys.stderr)
+        print(f"{self.name}:{lineno}: {message}", file=sys.stderr, flush=True)
 
     def _parse(self, stream: BinaryIO | gzip.GzipFile) -> Iterator[tuple[int, Any]]:
         for lineno, raw_line in enumerate(stream, 1):

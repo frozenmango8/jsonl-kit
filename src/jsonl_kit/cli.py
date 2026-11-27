@@ -103,6 +103,8 @@ def _add_file(parser: argparse.ArgumentParser) -> None:
 def _emit(value: Any) -> None:
     json.dump(value, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
+    # Keep stderr warnings next to the surrounding records when stdout is a pipe.
+    sys.stdout.flush()
 
 
 def _check_n(n: int) -> str | None:
@@ -313,8 +315,10 @@ def _write_csv(columns: list[str], rows: Iterable[Mapping[str, Any]]) -> None:
     if not columns:
         return
     writer.writerow(columns)
+    sys.stdout.flush()
     for row in rows:
         writer.writerow([_csv_cell(row.get(key)) for key in columns])
+        sys.stdout.flush()
 
 
 def _objects(reader: JsonlReader) -> Iterator[dict[str, Any]]:
